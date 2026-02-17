@@ -1,5 +1,6 @@
 package com.nidoham.bhubishwo.admin.presentation.screen
 
+import android.content.Intent
 import android.view.HapticFeedbackConstants
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -17,7 +18,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState  // ✅ Fix: was collectIsHoveredAsState — hover never fires on Android touch
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,7 +34,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Dashboard   // ✅ Fix: was Analytics (duplicate with ANALYTICS tab)
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Quiz
@@ -63,22 +64,54 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.nidoham.bhubishwo.admin.ui.theme.glassBackgroundColor
+import com.nidoham.bhubishwo.admin.CreatorActivity
 import com.nidoham.bhubishwo.admin.ui.theme.glassNavBarColor
 import com.nidoham.bhubishwo.admin.ui.theme.glassSurfaceColor
+
+// ══════════════════════════════════════════
+// CREATOR STUDIO — Intent extra key & types
+// ══════════════════════════════════════════
+
+/** Intent extra key passed to CreatorStudioActivity */
+const val EXTRA_CREATOR_TYPE = "type"
+
+/** Pass this to open the Quiz / Content creation flow */
+const val TYPE_CONTENT  = "content"
+
+/** Pass this to open the Resource / Image upload flow */
+const val TYPE_RESOURCE = "resource"
+
+// ══════════════════════════════════════════
+// NAV TABS
+// ══════════════════════════════════════════
 
 enum class AdminTab {
     DASHBOARD, QUIZZES, RESOURCES, ANALYTICS, SETTINGS
 }
 
+// ══════════════════════════════════════════
+// MAIN SCREEN
+// ══════════════════════════════════════════
+
 @Composable
 fun MainScreen() {
     var selectedTab    by remember { mutableStateOf(AdminTab.DASHBOARD) }
     var showCreateMenu by remember { mutableStateOf(false) }
-    val view = LocalView.current
+
+    val view    = LocalView.current
+    val context = LocalContext.current
+
+    // Helper: launch CreatorStudioActivity with the given type string
+    fun openCreatorStudio(type: String) {
+        val intent = Intent(context, CreatorActivity::class.java).apply {
+            putExtra(EXTRA_CREATOR_TYPE, type)
+        }
+        context.startActivity(intent)
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
 
@@ -162,6 +195,7 @@ fun MainScreen() {
             }
         }
 
+        // Dimmed backdrop — tap anywhere to dismiss
         AnimatedVisibility(
             visible = showCreateMenu,
             enter   = fadeIn(tween(200)),
@@ -171,28 +205,34 @@ fun MainScreen() {
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.45f))
-                    .clickable { showCreateMenu = false }   // tap outside to dismiss
+                    .clickable { showCreateMenu = false }
             )
         }
 
+        // FAB menu items — anchored above the FAB button
         AnimatedVisibility(
-            visible = showCreateMenu,
+            visible  = showCreateMenu,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(bottom = 88.dp, end = 16.dp),     // sit just above FAB
+                .padding(bottom = 88.dp, end = 16.dp),
             enter = slideInVertically(tween(220)) { it } + fadeIn(tween(220)),
             exit  = slideOutVertically(tween(160)) { it } + fadeOut(tween(160))
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+
+                // ── New Quiz → CreatorStudio with type = "content" ──────────
                 GlassMenuItem(
                     icon        = Icons.Default.Quiz,
                     label       = "New Quiz",
-                    description = "Create image and name quiz",
+                    description = "Create image / name quiz",
                     onClick     = {
                         view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                         showCreateMenu = false
+                        openCreatorStudio(TYPE_CONTENT)
                     }
                 )
+
+                // ── Upload Image → CreatorStudio with type = "resource" ─────
                 GlassMenuItem(
                     icon        = Icons.Default.Image,
                     label       = "Upload Image",
@@ -200,6 +240,7 @@ fun MainScreen() {
                     onClick     = {
                         view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                         showCreateMenu = false
+                        openCreatorStudio(TYPE_RESOURCE)
                     }
                 )
             }
@@ -241,7 +282,7 @@ fun SharedNavigationBar(
             val selected = tab == selectedTab
 
             val icon: ImageVector = when (tab) {
-                AdminTab.DASHBOARD -> Icons.Default.Dashboard   // now distinct
+                AdminTab.DASHBOARD -> Icons.Default.Dashboard
                 AdminTab.QUIZZES   -> Icons.Default.Quiz
                 AdminTab.RESOURCES -> Icons.Default.Folder
                 AdminTab.ANALYTICS -> Icons.Default.Analytics
@@ -252,7 +293,6 @@ fun SharedNavigationBar(
                 icon = {
                     BadgedBox(
                         badge = {
-                            // Only show badge on Dashboard when there are items
                             if (tab == AdminTab.DASHBOARD) {
                                 Badge { Text("0") }
                             }
@@ -261,7 +301,7 @@ fun SharedNavigationBar(
                         Icon(icon, contentDescription = tab.name)
                     }
                 },
-                label   = { Text(tab.name.lowercase().replaceFirstChar { it.uppercase() }) },
+                label    = { Text(tab.name.lowercase().replaceFirstChar { it.uppercase() }) },
                 selected = selected,
                 onClick  = { onTabSelected(tab) },
                 colors   = NavigationBarItemDefaults.colors(
@@ -276,6 +316,10 @@ fun SharedNavigationBar(
     }
 }
 
+// ══════════════════════════════════════════
+// GLASS MENU ITEM CARD
+// ══════════════════════════════════════════
+
 @Composable
 fun GlassMenuItem(
     icon       : ImageVector,
@@ -286,9 +330,9 @@ fun GlassMenuItem(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue  = if (isPressed) 0.97f else 1f,
+        targetValue   = if (isPressed) 0.97f else 1f,
         animationSpec = spring(Spring.DampingRatioMediumBouncy),
-        label        = "cardScale"
+        label         = "cardScale"
     )
 
     Card(
@@ -297,22 +341,23 @@ fun GlassMenuItem(
         modifier          = Modifier
             .width(280.dp)
             .scale(scale),
-        shape  = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = glassSurfaceColor(elevation = 2)
-        ),
+        shape     = RoundedCornerShape(16.dp),
+        colors    = CardDefaults.cardColors(containerColor = glassSurfaceColor(elevation = 2)),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Row(
-            modifier           = Modifier.padding(16.dp),
-            verticalAlignment  = Alignment.CenterVertically
+            modifier          = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Surface(
                 shape    = CircleShape,
                 color    = MaterialTheme.colorScheme.primaryContainer,
                 modifier = Modifier.size(48.dp)
             ) {
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier         = Modifier.fillMaxSize()
+                ) {
                     Icon(
                         imageVector        = icon,
                         contentDescription = null,
