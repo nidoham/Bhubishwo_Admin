@@ -6,9 +6,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nidoham.bhubishwo.admin.data.repository.ResourceRepository
 import com.nidoham.bhubishwo.admin.domain.media.Resource
-import com.nidoham.bhubishwo.admin.imgbb.ImgbbStorage
+import com.nidoham.bhubishwo.admin.imgbb.ImgbbRepository
 import com.nidoham.bhubishwo.admin.presentation.screen.creator.ResourceFormEvent
 import com.nidoham.bhubishwo.admin.presentation.screen.creator.ResourceFormState
+import com.nidoham.bhubishwo.admin.presentation.screen.creator.ResourceType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +29,7 @@ import javax.inject.Inject
 @HiltViewModel
 class ResourceViewModel @Inject constructor(
     private val repository: ResourceRepository,
+    private val imgbbRepository: ImgbbRepository, // ✅ Injected instead of static usage
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -59,8 +61,8 @@ class ResourceViewModel @Inject constructor(
                 _state.update {
                     it.copy(
                         selectedImageUri = event.uri,
-                        isImageLoading   = false,
-                        errorMessage     = null
+                        isImageLoading = false, // Stop loading spinner whether success or cancel
+                        errorMessage = null
                     )
                 }
             }
@@ -71,11 +73,12 @@ class ResourceViewModel @Inject constructor(
 
             is ResourceFormEvent.TypeToggled -> {
                 _state.update { current ->
-                    val updated = if (event.type in current.selectedTypes)
+                    val newTypes = if (event.type in current.selectedTypes) {
                         current.selectedTypes - event.type
-                    else
+                    } else {
                         current.selectedTypes + event.type
-                    current.copy(selectedTypes = updated)
+                    }
+                    current.copy(selectedTypes = newTypes)
                 }
             }
 
@@ -84,8 +87,6 @@ class ResourceViewModel @Inject constructor(
             is ResourceFormEvent.ErrorDismissed -> {
                 _state.update { it.copy(errorMessage = null) }
             }
-
-            else -> {}
         }
     }
 
@@ -105,104 +106,97 @@ class ResourceViewModel @Inject constructor(
         _state.update { it.copy(isLoading = true, errorMessage = null) }
 
         viewModelScope.launch {
+            var tempFile: File? = null
+
             try {
-                // Step 1 — URI → temp File
+                // Step 1: Convert Uri to specific Temp File in IO context
                 val uri = checkNotNull(current.selectedImageUri)
-                val imageFile = withContext(Dispatchers.IO) { uriToTempFile(uri) }
+                tempFile = withContext(Dispatchers.IO) { uriToTempFile(uri) }
 
-                if (imageFile == null) {
-                    _state.update {
-                        it.copy(isLoading = false, errorMessage = "Failed to read image from storage")
-                    }
-                    _events.tryEmit(ResourceEvent.ShowError("Failed to read image file"))
-                    return@launch
+                if (tempFile == null || !tempFile.exists()) {
+                    throw Exception("Could not process image file")
                 }
 
-                // Step 2 — Upload to ImgBB
-                val imgbbResult = withContext(Dispatchers.IO) {
-                    ImgbbStorage.upload(file = imageFile, name = current.title.trim())
-                }
-
-                imageFile.delete()
-
-                if (!imgbbResult.success || imgbbResult.url.isNullOrBlank()) {
-                    _state.update {
-                        it.copy(
-                            isLoading    = false,
-                            errorMessage = imgbbResult.errorMessage ?: "Upload failed"
-                        )
-                    }
-                    _events.tryEmit(
-                        ResourceEvent.ShowError(imgbbResult.errorMessage ?: "Image upload failed")
+                // Step 2: Upload to ImgBB
+                val uploadResult = withContext(Dispatchers.IO) {
+                    imgbbRepository.upload(
+                        file = tempFile,
+                        customName = current.title.trim()
                     )
-                    return@launch
                 }
 
-                // Step 3 — Persist to Firestore
+                if (!uploadResult.success || uploadResult.url == null) {
+                    throw Exception(uploadResult.error ?: "Image upload failed")
+                }
+
+                // Step 3: Save metadata to Firestore
                 val resource = Resource(
-                    id    = UUID.randomUUID().toString(),
+                    id = UUID.randomUUID().toString(),
                     title = current.title.trim(),
-                    url   = imgbbResult.url,
-                    tags  = current.tags
+                    url = uploadResult.url, // The public URL from ImgBB
+                    tags = current.tags
                 )
 
-                val firestoreResult = repository.push(resource)
+                val dbResult = repository.push(resource)
 
-                if (firestoreResult.isSuccess) {
-                    _state.update { ResourceFormState() }
-                    _events.tryEmit(ResourceEvent.UploadSuccess(resource.id))
+                if (dbResult.isSuccess) {
+                    _state.update { ResourceFormState() } // Reset form
+                    _events.emit(ResourceEvent.UploadSuccess(resource.id))
                 } else {
-                    val error = firestoreResult.exceptionOrNull()?.message ?: "Save failed"
-                    _state.update { it.copy(isLoading = false, errorMessage = error) }
-                    _events.tryEmit(ResourceEvent.ShowError(error))
+                    throw dbResult.exceptionOrNull() ?: Exception("Database save failed")
                 }
 
             } catch (e: Exception) {
-                val msg = "Unexpected error: ${e.localizedMessage}"
-                _state.update { it.copy(isLoading = false, errorMessage = msg) }
-                _events.tryEmit(ResourceEvent.ShowError(msg))
+                _state.update { it.copy(isLoading = false, errorMessage = e.message) }
+                _events.emit(ResourceEvent.ShowError(e.message ?: "Unknown error"))
+            } finally {
+                // Cleanup temp file
+                withContext(Dispatchers.IO) {
+                    try { tempFile?.delete() } catch (_: Exception) { }
+                }
             }
         }
     }
 
     // ════════════════════════════════════════════════════════
-    // URI → FILE
+    // UTILS
     // ════════════════════════════════════════════════════════
 
     private fun uriToTempFile(uri: Uri): File? {
         return try {
-            val inputStream = context.contentResolver.openInputStream(uri) ?: return null
-            val ext = context.contentResolver.getType(uri)
-                ?.substringAfterLast('/')
-                ?.let { ".$it" }
-                ?: ".jpg"
-            val tempFile = File.createTempFile("upload_", ext, context.cacheDir)
-            tempFile.outputStream().use { out -> inputStream.copyTo(out) }
+            val contentResolver = context.contentResolver
+            val inputStream = contentResolver.openInputStream(uri) ?: return null
+
+            // Try to guess extension or default to jpg
+            val type = contentResolver.getType(uri)
+            val ext = when {
+                type?.contains("png") == true -> ".png"
+                type?.contains("webp") == true -> ".webp"
+                else -> ".jpg"
+            }
+
+            val file = File.createTempFile("upload_", ext, context.cacheDir)
+            file.outputStream().use { output ->
+                inputStream.copyTo(output)
+            }
             inputStream.close()
-            tempFile
+            file
         } catch (e: Exception) {
+            e.printStackTrace()
             null
         }
     }
 
-    // ════════════════════════════════════════════════════════
-    // VALIDATION
-    // ════════════════════════════════════════════════════════
-
     private fun validate(state: ResourceFormState): String? = when {
-        state.title.isBlank()          -> "Title cannot be empty"
+        state.title.isBlank() -> "Title cannot be empty"
         state.selectedImageUri == null -> "Please select an image"
-        state.tags.isEmpty()           -> "Select at least one resource type"
-        else                           -> null
+        state.selectedTypes.isEmpty() -> "Select at least one resource type"
+        else -> null
     }
 }
 
-// ════════════════════════════════════════════════════════
-// SEALED CLASS — One-shot UI events
-// ════════════════════════════════════════════════════════
-
 sealed class ResourceEvent {
-    data class UploadSuccess(val resourceId: String)    : ResourceEvent()
-    data class ShowError(val message: String)           : ResourceEvent()
+    data class UploadSuccess(val resourceId: String) : ResourceEvent()
+    data class ShowError(val message: String) : ResourceEvent()
     data class NavigateToDetail(val resourceId: String) : ResourceEvent()
 }

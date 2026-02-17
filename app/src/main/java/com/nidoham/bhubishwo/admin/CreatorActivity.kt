@@ -1,6 +1,7 @@
 package com.nidoham.bhubishwo.admin
 
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -23,6 +24,7 @@ import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -30,12 +32,14 @@ import com.nidoham.bhubishwo.admin.presentation.screen.EXTRA_CREATOR_TYPE
 import com.nidoham.bhubishwo.admin.presentation.screen.TYPE_CONTENT
 import com.nidoham.bhubishwo.admin.presentation.screen.TYPE_RESOURCE
 import com.nidoham.bhubishwo.admin.presentation.screen.creator.ContentCreatorContent
-import com.nidoham.bhubishwo.admin.presentation.screen.creator.ResourceCreatorContent
+import com.nidoham.bhubishwo.admin.presentation.screen.creator.ResourceCreatorScreen // ✅ Import the Screen, not just the Content
 import com.nidoham.bhubishwo.admin.ui.theme.AdminTheme
+import com.nidoham.bhubishwo.admin.ui.theme.glassSurfaceColor
 import com.nidoham.bhubishwo.admin.ui.theme.glassTopBarColor
 import com.nidoham.bhubishwo.admin.ui.theme.glassTopBarScrolledColor
-import com.nidoham.bhubishwo.admin.ui.theme.glassSurfaceColor
+import dagger.hilt.android.AndroidEntryPoint // ✅ Required for Hilt Injection
 
+@AndroidEntryPoint // ✅ Don't forget this!
 class CreatorActivity : ComponentActivity() {
 
     @OptIn(ExperimentalMaterial3Api::class)
@@ -81,10 +85,20 @@ class CreatorActivity : ComponentActivity() {
                     ) {
                         Box(
                             modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.TopStart // Changed from Center for forms
+                            contentAlignment = Alignment.TopStart
                         ) {
                             when (creatorType) {
-                                TYPE_RESOURCE -> ResourceCreatorContent()
+                                // ✅ FIX: Use ResourceCreatorScreen (Stateful) which injects the ViewModel.
+                                // ResourceCreatorContent (Stateless) requires manual parameters, which caused your crash.
+                                TYPE_RESOURCE -> ResourceCreatorScreen(
+                                    onUploadSuccess = {
+                                        Toast.makeText(this@CreatorActivity, "Resource Uploaded!", Toast.LENGTH_SHORT).show()
+                                        finish()
+                                    },
+                                    onError = { msg ->
+                                        Toast.makeText(this@CreatorActivity, msg, Toast.LENGTH_LONG).show()
+                                    }
+                                )
                                 else -> ContentCreatorContent()
                             }
                         }
@@ -100,7 +114,7 @@ class CreatorActivity : ComponentActivity() {
 private fun GlassTopBar(
     creatorType: String,
     scrollBehavior: TopAppBarScrollBehavior,
-    containerColor: androidx.compose.ui.graphics.Color,
+    containerColor: Color,
     onBackClick: () -> Unit
 ) {
     TopAppBar(

@@ -1,7 +1,9 @@
 package com.nidoham.bhubishwo.admin.di
 
 import com.google.firebase.firestore.FirebaseFirestore
+import com.nidoham.bhubishwo.admin.App
 import com.nidoham.bhubishwo.admin.data.repository.ResourceRepository
+import com.nidoham.bhubishwo.admin.imgbb.ImgbbRepository
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -28,4 +30,10 @@ object AppModule {
 
     @Provides
     fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
+
+    @Provides
+    @Singleton
+    fun provideImgbbRepository(): ImgbbRepository {
+        return ImgbbRepository(App.IMGBB_API_KEY)
+    }
 }

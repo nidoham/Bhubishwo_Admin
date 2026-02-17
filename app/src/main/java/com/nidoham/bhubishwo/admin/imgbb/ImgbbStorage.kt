@@ -1,196 +1,186 @@
 package com.nidoham.bhubishwo.admin.imgbb
 
-import android.app.Application
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.*
+import okhttp3.FormBody
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import org.json.JSONObject
 import java.io.File
-import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
- * ImgBB Storage singleton. Initialize with [init] in Application.onCreate()
- * Uses suspend functions for safe coroutine-based networking
+ * Handles uploading images to ImgBB.
+ *
+ * Recommendation: Inject this class using Hilt/Koin rather than using it as a static Object.
+ * Example: @Provides fun provideImgbb() = ImgbbRepository("YOUR_API_KEY")
  */
-object ImgbbStorage {
+class ImgbbRepository(
+    private val apiKey: String
+) {
 
-    private const val BASE_URL = "https://api.imgbb.com/1/upload"
-    private const val MAX_FILE_SIZE = 32 * 1024 * 1024 // 32MB
-
-    private lateinit var apiKey: String
     private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(60, TimeUnit.SECONDS) // Increased for large uploads
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    data class UploadResult(
+    companion object {
+        private const val BASE_URL = "https://api.imgbb.com/1/upload"
+        private const val MAX_FILE_SIZE = 32 * 1024 * 1024 // 32 MB
+    }
+
+    data class ImgbbResult(
         val success: Boolean,
         val url: String?,
         val deleteUrl: String?,
         val thumbUrl: String?,
-        val errorMessage: String?,
-        val rawResponse: String?
+        val title: String?,
+        val error: String? = null
     )
 
-    /**
-     * Initialize with API key
-     */
-    fun init(key: String) {
-        apiKey = key
-    }
+    // ==================== UPLOAD FILE ====================
 
-    /**
-     * Upload image file to ImgBB - suspend function for coroutines
-     */
     suspend fun upload(
         file: File,
-        name: String? = null,
-        expiration: Int? = null
-    ): UploadResult = withContext(Dispatchers.IO) {
-        checkInitialized()
+        customName: String? = null,
+        expirationSeconds: Int? = null
+    ): ImgbbResult = withContext(Dispatchers.IO) {
+        if (!file.exists() || !file.canRead()) {
+            return@withContext ImgbbResult(false, null, null, null, null, "File does not exist or cannot be read")
+        }
+        if (file.length() > MAX_FILE_SIZE) {
+            return@withContext ImgbbResult(false, null, null, null, null, "File exceeds 32MB limit")
+        }
 
-        if (!file.exists())
-            return@withContext UploadResult(false, null, null, null, "File does not exist", null)
+        // 1. Build the URL (Only API Key in query params)
+        val url = buildBaseUrl()
 
-        if (file.length() > MAX_FILE_SIZE)
-            return@withContext UploadResult(false, null, null, null, "File size exceeds 32MB limit", null)
-
-        // Build URL with API key as query parameter
-        val url = buildUrl(name, expiration)
-
-        val requestBody = MultipartBody.Builder()
+        // 2. Build Multipart Body
+        // Moving 'name' and 'expiration' to the BODY avoids URL encoding issues completely.
+        val builder = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
-            .addFormDataPart(
-                "image",
-                file.name,
-                file.asRequestBody("image/*".toMediaTypeOrNull())
-            )
-            .build()
+            .addFormDataPart("image", file.name, file.asRequestBody("image/*".toMediaTypeOrNull()))
 
-        val request = Request.Builder()
-            .url(url)
-            .post(requestBody)
-            .build()
+        if (!customName.isNullOrBlank()) {
+            builder.addFormDataPart("name", customName.trim())
+        }
+        if (expirationSeconds != null && expirationSeconds in 60..15_552_000) {
+            builder.addFormDataPart("expiration", expirationSeconds.toString())
+        }
 
-        execute(request)
+        executeRequest(url, builder.build())
     }
 
-    /**
-     * Upload Base64 image - suspend function
-     */
+    // ==================== UPLOAD BASE64 ====================
+
     suspend fun uploadBase64(
         base64: String,
-        name: String? = null,
-        expiration: Int? = null
-    ): UploadResult = withContext(Dispatchers.IO) {
-        checkInitialized()
+        customName: String? = null,
+        expirationSeconds: Int? = null
+    ): ImgbbResult = withContext(Dispatchers.IO) {
+        val url = buildBaseUrl()
 
-        val url = buildUrl(name, expiration)
+        val builder = FormBody.Builder()
+            .add("image", base64) // ImgBB handles base64 strings automatically
 
-        val formBody = FormBody.Builder()
-            .add("image", base64)
-            .build()
+        if (!customName.isNullOrBlank()) {
+            builder.add("name", customName.trim())
+        }
+        if (expirationSeconds != null && expirationSeconds in 60..15_552_000) {
+            builder.add("expiration", expirationSeconds.toString())
+        }
 
-        val request = Request.Builder()
-            .url(url)
-            .post(formBody)
-            .build()
-
-        execute(request)
+        executeRequest(url, builder.build())
     }
 
-    /**
-     * Upload from URL - suspend function
-     */
+    // ==================== UPLOAD URL ====================
+
     suspend fun uploadFromUrl(
         imageUrl: String,
-        name: String? = null,
-        expiration: Int? = null
-    ): UploadResult = withContext(Dispatchers.IO) {
-        checkInitialized()
+        customName: String? = null,
+        expirationSeconds: Int? = null
+    ): ImgbbResult = withContext(Dispatchers.IO) {
+        val url = buildBaseUrl()
 
-        val url = buildUrl(name, expiration)
-
-        val formBody = FormBody.Builder()
+        val builder = FormBody.Builder()
             .add("image", imageUrl)
-            .build()
 
+        if (!customName.isNullOrBlank()) {
+            builder.add("name", customName.trim())
+        }
+        if (expirationSeconds != null && expirationSeconds in 60..15_552_000) {
+            builder.add("expiration", expirationSeconds.toString())
+        }
+
+        executeRequest(url, builder.build())
+    }
+
+    // ==================== INTERNAL UTILS ====================
+
+    private fun buildBaseUrl(): HttpUrl {
+        return BASE_URL.toHttpUrlOrNull()!!
+            .newBuilder()
+            .addQueryParameter("key", apiKey)
+            .build()
+    }
+
+    private fun executeRequest(url: HttpUrl, body: okhttp3.RequestBody): ImgbbResult {
         val request = Request.Builder()
             .url(url)
-            .post(formBody)
+            .post(body)
             .build()
 
-        execute(request)
-    }
-
-    /**
-     * Build URL with API key and optional parameters
-     */
-    private fun buildUrl(name: String?, expiration: Int?): String {
-        val builder = StringBuilder(BASE_URL)
-            .append("?key=").append(apiKey)
-
-        name?.let { builder.append("&name=").append(it) }
-        expiration?.let {
-            if (it in 60..15552000) builder.append("&expiration=").append(it)
-        }
-
-        return builder.toString()
-    }
-
-    private fun execute(request: Request): UploadResult {
         return try {
             client.newCall(request).execute().use { response ->
-                val body = response.body?.string()
-                if (!response.isSuccessful || body == null) {
-                    return UploadResult(
-                        false, null, null, null,
-                        "HTTP ${response.code}: ${response.message}", body
+                val responseBody = response.body?.string()
+
+                if (!response.isSuccessful || responseBody.isNullOrBlank()) {
+                    return ImgbbResult(
+                        success = false,
+                        url = null, deleteUrl = null, thumbUrl = null, title = null,
+                        error = "HTTP ${response.code}: ${response.message}"
                     )
                 }
-                parse(body)
+                parseResponse(responseBody)
             }
-        } catch (e: IOException) {
-            UploadResult(false, null, null, null, "Network error: ${e.message}", null)
+        } catch (e: Exception) {
+            ImgbbResult(
+                success = false,
+                url = null, deleteUrl = null, thumbUrl = null, title = null,
+                error = "Network Error: ${e.message}"
+            )
         }
     }
 
-    private fun parse(json: String): UploadResult {
+    private fun parseResponse(jsonString: String): ImgbbResult {
         return try {
-            val root = JSONObject(json)
+            val root = JSONObject(jsonString)
+            val success = root.optBoolean("success")
 
-            val isSuccess = root.optBoolean("success", false)
-            val statusCode = root.optInt("status", 0)
-
-            if (!isSuccess || statusCode != 200) {
-                val errorObj = root.optJSONObject("error")
-                val errorMessage = errorObj?.optString("message")
-                    ?: root.optString("error", "Unknown error")
-                        .ifBlank { "HTTP $statusCode" }
-                return UploadResult(false, null, null, null, errorMessage, json)
+            if (!success) {
+                val errorMsg = root.optJSONObject("error")?.optString("message")
+                    ?: "Unknown ImgBB Error"
+                return ImgbbResult(false, null, null, null, null, errorMsg)
             }
 
             val data = root.getJSONObject("data")
-            UploadResult(
+
+            ImgbbResult(
                 success = true,
-                url = data.optString("url").ifBlank { null },
-                deleteUrl = data.optString("delete_url").ifBlank { null },
-                thumbUrl = data.optJSONObject("thumb")?.optString("url")?.ifBlank { null },
-                errorMessage = null,
-                rawResponse = json
+                url = data.getString("url"),
+                deleteUrl = data.optString("delete_url"),
+                thumbUrl = data.optJSONObject("thumb")?.optString("url"),
+                title = data.optString("title"),
+                error = null
             )
         } catch (e: Exception) {
-            UploadResult(false, null, null, null, "Parse error: ${e.message}", json)
-        }
-    }
-
-    private fun checkInitialized() {
-        check(::apiKey.isInitialized) {
-            "ImgbbStorage not initialized. Call init() in Application.onCreate()"
+            ImgbbResult(false, null, null, null, null, "JSON Parsing Error: ${e.message}")
         }
     }
 }

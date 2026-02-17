@@ -1,6 +1,6 @@
 package com.nidoham.bhubishwo.admin.domain.media
 
-import android.net.Uri
+import java.net.URI
 
 data class Resource(
     val id: String,
@@ -9,11 +9,20 @@ data class Resource(
     val tags: Set<String> = emptySet()
 ) {
     init {
-        require(id.isNotBlank())
-        require(title.isNotBlank())
-        require(runCatching { Uri.parse(url) }.isSuccess) { "Invalid URL: $url" }
+        require(id.isNotBlank()) { "id cannot be blank" }
+        require(title.isNotBlank()) { "title cannot be blank" }
+
+        // Use standard Java URI for validation to keep this class Pure Kotlin
+        try {
+            val parsed = URI.create(url)
+            require(!parsed.scheme.isNullOrBlank() && !parsed.host.isNullOrBlank()) {
+                "Invalid URL (must have a scheme and host): $url"
+            }
+        } catch (e: IllegalArgumentException) {
+            // Re-throw with your specific message or let the original bubble up
+            throw IllegalArgumentException("Invalid URL format: $url", e)
+        }
     }
 
-    val uri: Uri get() = Uri.parse(url)
     val hasTags: Boolean get() = tags.isNotEmpty()
 }

@@ -1,7 +1,6 @@
 package com.nidoham.bhubishwo.admin
 
 import android.app.Application
-import com.nidoham.bhubishwo.admin.imgbb.ImgbbStorage
 import dagger.hilt.android.HiltAndroidApp
 
 @HiltAndroidApp
@@ -16,8 +15,5 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
-
-        // Initialize ImgBB Storage
-        ImgbbStorage.init(IMGBB_API_KEY)
     }
 }

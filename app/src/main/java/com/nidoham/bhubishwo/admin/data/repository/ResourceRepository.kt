@@ -1,7 +1,9 @@
 package com.nidoham.bhubishwo.admin.data.repository
 
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import com.nidoham.bhubishwo.admin.domain.media.Resource
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -18,12 +20,18 @@ class ResourceRepository(
         const val FIELD_TITLE = "title"
         const val FIELD_TAGS = "tags"
         const val FIELD_CREATED_AT = "createdAt"
+        const val FIELD_ID = "id"
     }
 
-    // ==================== PUSH ====================
+    // ==================== PUSH (CREATE / UPDATE) ====================
 
+    /**
+     * Saves a resource. Uses SetOptions.merge() to update fields without
+     * overwriting the entire document if it already exists.
+     */
     suspend fun push(resource: Resource): Result<Unit> = try {
-        collection.document(resource.id).set(resource.toMap()).await()
+        val data = resource.toMap()
+        collection.document(resource.id).set(data, SetOptions.merge()).await()
         Result.success(Unit)
     } catch (e: Exception) {
         Result.failure(e)
@@ -32,7 +40,8 @@ class ResourceRepository(
     suspend fun pushAll(resources: List<Resource>): Result<Int> = try {
         val batch = firestore.batch()
         resources.forEach { resource ->
-            batch.set(collection.document(resource.id), resource.toMap())
+            // merge() ensures we don't accidentally wipe existing metadata if logic changes
+            batch.set(collection.document(resource.id), resource.toMap(), SetOptions.merge())
         }
         batch.commit().await()
         Result.success(resources.size)
@@ -44,7 +53,7 @@ class ResourceRepository(
 
     suspend fun getById(id: String): Result<Resource?> = try {
         val doc = collection.document(id).get().await()
-        Result.success(doc.toResource())
+        Result.success(doc.toSafeResource())
     } catch (e: Exception) {
         Result.failure(e)
     }
@@ -53,44 +62,57 @@ class ResourceRepository(
         val listener = collection
             .orderBy(FIELD_CREATED_AT, Query.Direction.DESCENDING)
             .addSnapshotListener { snapshot, error ->
-                if (error != null) { close(error); return@addSnapshotListener }
-                trySend(snapshot?.documents?.mapNotNull { it.toResource() } ?: emptyList())
+                if (error != null) {
+                    close(error)
+                    return@addSnapshotListener
+                }
+                val items = snapshot?.documents?.mapNotNull { it.toSafeResource() } ?: emptyList()
+                trySend(items)
             }
         awaitClose { listener.remove() }
     }
 
     suspend fun getAll(): Result<List<Resource>> = try {
-        val snapshot = collection.get().await()
-        Result.success(snapshot.documents.mapNotNull { it.toResource() })
+        val snapshot = collection.orderBy(FIELD_CREATED_AT, Query.Direction.DESCENDING).get().await()
+        Result.success(snapshot.documents.mapNotNull { it.toSafeResource() })
     } catch (e: Exception) {
         Result.failure(e)
     }
 
-    // ==================== SEARCH ====================
+    // ==================== SEARCH & FILTER ====================
 
     suspend fun searchByTitle(query: String): Result<List<Resource>> {
         return try {
             if (query.isBlank()) return Result.success(emptyList())
-            val end = query + '\uf8ff'
+            val end = query + '\uf8ff' // Unicode trick for "starts with" query
             val snapshot = collection
                 .whereGreaterThanOrEqualTo(FIELD_TITLE, query)
                 .whereLessThanOrEqualTo(FIELD_TITLE, end)
+                .orderBy(FIELD_TITLE) // Required for range query
                 .get().await()
-            Result.success(snapshot.documents.mapNotNull { it.toResource() })
+            Result.success(snapshot.documents.mapNotNull { it.toSafeResource() })
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
     fun searchByTitleFlow(query: String): Flow<List<Resource>> = callbackFlow {
-        if (query.isBlank()) { trySend(emptyList()); close(); return@callbackFlow }
+        if (query.isBlank()) {
+            trySend(emptyList())
+            close()
+            return@callbackFlow
+        }
         val end = query + '\uf8ff'
         val listener = collection
             .whereGreaterThanOrEqualTo(FIELD_TITLE, query)
             .whereLessThanOrEqualTo(FIELD_TITLE, end)
+            .orderBy(FIELD_TITLE)
             .addSnapshotListener { snapshot, error ->
-                if (error != null) { close(error); return@addSnapshotListener }
-                trySend(snapshot?.documents?.mapNotNull { it.toResource() } ?: emptyList())
+                if (error != null) {
+                    close(error)
+                    return@addSnapshotListener
+                }
+                trySend(snapshot?.documents?.mapNotNull { it.toSafeResource() } ?: emptyList())
             }
         awaitClose { listener.remove() }
     }
@@ -99,37 +121,45 @@ class ResourceRepository(
         val snapshot = collection
             .whereArrayContains(FIELD_TAGS, tag)
             .get().await()
-        Result.success(snapshot.documents.mapNotNull { it.toResource() })
+        Result.success(snapshot.documents.mapNotNull { it.toSafeResource() })
     } catch (e: Exception) {
         Result.failure(e)
     }
 
     // ==================== PAGING ====================
 
+    /**
+     * Note: For this to work with 'orderBy(FIELD_CREATED_AT)', you need a Composite Index
+     * in Firebase Console for: tags (Array) + createdAt (Desc).
+     */
     suspend fun filterByTagPage(
         tag: String,
         lastDocumentId: String? = null,
         pageSize: Long = DEFAULT_PAGE_SIZE
     ): Result<PageResult<Resource>> = try {
-        // ✅ Renamed: var query → var firestoreQuery
-        var firestoreQuery = collection
+        var queryBuilder = collection
             .whereArrayContains(FIELD_TAGS, tag)
             .orderBy(FIELD_CREATED_AT, Query.Direction.DESCENDING)
             .limit(pageSize)
 
         if (lastDocumentId != null) {
+            // Note: This requires an extra read. Optimization: Pass timestamp instead of ID if possible.
             val lastDoc = collection.document(lastDocumentId).get().await()
-            firestoreQuery = firestoreQuery.startAfter(lastDoc)
+            if (lastDoc.exists()) {
+                queryBuilder = queryBuilder.startAfter(lastDoc)
+            }
         }
 
-        val snapshot = firestoreQuery.get().await()
-        val items = snapshot.documents.mapNotNull { it.toResource() }
+        val snapshot = queryBuilder.get().await()
+        val items = snapshot.documents.mapNotNull { it.toSafeResource() }
 
-        Result.success(PageResult(
-            items = items,
-            lastDocumentId = snapshot.documents.lastOrNull()?.id,
-            hasNext = items.size.toLong() == pageSize
-        ))
+        Result.success(
+            PageResult(
+                items = items,
+                lastDocumentId = snapshot.documents.lastOrNull()?.id,
+                hasNext = items.size.toLong() == pageSize
+            )
+        )
     } catch (e: Exception) {
         Result.failure(e)
     }
@@ -138,24 +168,27 @@ class ResourceRepository(
         lastDocumentId: String? = null,
         pageSize: Long = DEFAULT_PAGE_SIZE
     ): Result<PageResult<Resource>> = try {
-        // ✅ Renamed: var query → var firestoreQuery
-        var firestoreQuery = collection
+        var queryBuilder = collection
             .orderBy(FIELD_CREATED_AT, Query.Direction.DESCENDING)
             .limit(pageSize)
 
         if (lastDocumentId != null) {
             val lastDoc = collection.document(lastDocumentId).get().await()
-            firestoreQuery = firestoreQuery.startAfter(lastDoc)
+            if (lastDoc.exists()) {
+                queryBuilder = queryBuilder.startAfter(lastDoc)
+            }
         }
 
-        val snapshot = firestoreQuery.get().await()
-        val items = snapshot.documents.mapNotNull { it.toResource() }
+        val snapshot = queryBuilder.get().await()
+        val items = snapshot.documents.mapNotNull { it.toSafeResource() }
 
-        Result.success(PageResult(
-            items = items,
-            lastDocumentId = snapshot.documents.lastOrNull()?.id,
-            hasNext = items.size.toLong() == pageSize
-        ))
+        Result.success(
+            PageResult(
+                items = items,
+                lastDocumentId = snapshot.documents.lastOrNull()?.id,
+                hasNext = items.size.toLong() == pageSize
+            )
+        )
     } catch (e: Exception) {
         Result.failure(e)
     }
@@ -169,7 +202,7 @@ class ResourceRepository(
             if (query.isBlank()) return Result.success(PageResult(emptyList(), null, false))
 
             val end = query + '\uf8ff'
-            var firestoreQuery = collection
+            var queryBuilder = collection
                 .whereGreaterThanOrEqualTo(FIELD_TITLE, query)
                 .whereLessThanOrEqualTo(FIELD_TITLE, end)
                 .orderBy(FIELD_TITLE)
@@ -177,17 +210,21 @@ class ResourceRepository(
 
             if (lastDocumentId != null) {
                 val lastDoc = collection.document(lastDocumentId).get().await()
-                firestoreQuery = firestoreQuery.startAfter(lastDoc)
+                if (lastDoc.exists()) {
+                    queryBuilder = queryBuilder.startAfter(lastDoc)
+                }
             }
 
-            val snapshot = firestoreQuery.get().await()
-            val items = snapshot.documents.mapNotNull { it.toResource() }
+            val snapshot = queryBuilder.get().await()
+            val items = snapshot.documents.mapNotNull { it.toSafeResource() }
 
-            Result.success(PageResult(
-                items = items,
-                lastDocumentId = snapshot.documents.lastOrNull()?.id,
-                hasNext = items.size.toLong() == pageSize
-            ))
+            Result.success(
+                PageResult(
+                    items = items,
+                    lastDocumentId = snapshot.documents.lastOrNull()?.id,
+                    hasNext = items.size.toLong() == pageSize
+                )
+            )
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -211,23 +248,39 @@ class ResourceRepository(
         Result.failure(e)
     }
 
-    // ==================== MAPPERS ====================
+    // ==================== MAPPERS & UTILS ====================
 
     private fun Resource.toMap(): Map<String, Any?> = mapOf(
-        "id" to id,
-        "title" to title,
+        FIELD_ID to id,
+        FIELD_TITLE to title,
         "url" to url,
-        "tags" to tags.toList(),
-        FIELD_CREATED_AT to System.currentTimeMillis()
+        FIELD_TAGS to tags.toList(),
+        // Use serverTimestamp for accuracy.
+        // NOTE: In a 'merge' operation, this might overwrite original creation time
+        // depending on your business logic requirements.
+        FIELD_CREATED_AT to FieldValue.serverTimestamp()
     )
 
-    private fun com.google.firebase.firestore.DocumentSnapshot.toResource(): Resource? {
-        return Resource(
-            id = getString("id") ?: return null,
-            title = getString("title") ?: return null,
-            url = getString("url") ?: return null,
-            tags = (get("tags") as? List<*>)?.filterIsInstance<String>()?.toSet() ?: emptySet()
-        )
+    /**
+     * Converts a DocumentSnapshot to a Resource safely.
+     *
+     * Because the Resource domain class has an 'init' block that throws
+     * IllegalArgumentException for invalid data, we MUST wrap creation in a try-catch.
+     * Otherwise, one bad document in the DB will crash the entire list.
+     */
+    private fun com.google.firebase.firestore.DocumentSnapshot.toSafeResource(): Resource? {
+        val id = getString(FIELD_ID) ?: return null
+        val title = getString(FIELD_TITLE) ?: return null
+        val url = getString("url") ?: return null
+        val tags = (get(FIELD_TAGS) as? List<*>)?.filterIsInstance<String>()?.toSet() ?: emptySet()
+
+        return try {
+            Resource(id, title, url, tags)
+        } catch (e: Exception) {
+            // Log the error internally if needed (e.g. Timber.e("Invalid resource $id: ${e.message}"))
+            // Return null so mapNotNull skips this item
+            null
+        }
     }
 
     data class PageResult<T>(
