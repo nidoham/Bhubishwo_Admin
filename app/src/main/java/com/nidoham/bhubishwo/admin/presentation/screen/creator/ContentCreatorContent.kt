@@ -28,7 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import com.nidoham.bhubishwo.admin.presentation.screen.content.ImageContentScreeen
+import com.nidoham.bhubishwo.admin.presentation.screen.content.ImageContentScreen
 import com.nidoham.bhubishwo.admin.presentation.screen.content.TextContentScreeen
 
 @Composable
@@ -95,7 +95,7 @@ fun ContentCreatorContent(
             ) { tab ->
                 when (tab) {
                     TabType.TEXT -> TextContentScreeen()
-                    TabType.IMAGE -> ImageContentScreeen()
+                    TabType.IMAGE -> ImageContentScreen()
                 }
             }
         }

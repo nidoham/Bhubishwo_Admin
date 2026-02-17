@@ -51,12 +51,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.nidoham.bhubishwo.admin.data.repository.ResourceRepository
+import com.nidoham.bhubishwo.admin.presentation.component.dialog.ImageUrlPickerDialog
 import com.nidoham.bhubishwo.admin.ui.theme.*
 
 @Composable
-fun ImageContentScreeen() {
-    // State
+fun ImageContentScreen() {
+    // --- State ---
     var selectedImageUri by remember { mutableStateOf<String?>(null) }
+    var showImageDialog by remember { mutableStateOf(false) }
     var title by remember { mutableStateOf("") }
 
     // Options
@@ -67,9 +70,13 @@ fun ImageContentScreeen() {
 
     // -1 means no option is selected as correct
     var correctOptionIndex by remember { mutableIntStateOf(-1) }
-
     var isLoading by remember { mutableStateOf(false) }
 
+    // Dependencies
+    // Ideally injected via Hilt/Koin, but instantiated here for the snippet context
+    val repository = remember { ResourceRepository() }
+
+    // Theme Logic
     val isDark = isSystemInDarkTheme()
     val scrollState = rememberScrollState()
 
@@ -88,17 +95,14 @@ fun ImageContentScreeen() {
                 .fillMaxSize()
                 .verticalScroll(scrollState)
                 .padding(horizontal = 20.dp)
-                .padding(top = 24.dp, bottom = 100.dp), // Padding for button
+                .padding(top = 24.dp, bottom = 100.dp), // Padding for bottom button
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
 
             // 1. Big Clickable Image Card
             GlassImagePicker(
                 imageUri = selectedImageUri,
-                onClick = {
-                    // Simulate picking an image
-                    selectedImageUri = "https://picsum.photos/800/600"
-                },
+                onClick = { showImageDialog = true }, // Opens the Dialog
                 isDark = isDark
             )
 
@@ -172,7 +176,8 @@ fun ImageContentScreeen() {
                 onClick = {
                     if (isValid) {
                         isLoading = true
-                        // TODO: Publish Action
+                        // TODO: Implement Push Logic using Repository
+                        // repository.push(Resource(...))
                     }
                 },
                 enabled = isValid && !isLoading,
@@ -211,8 +216,24 @@ fun ImageContentScreeen() {
                 }
             }
         }
+
+        // --- Image URL Picker Dialog ---
+        ImageUrlPickerDialog(
+            visible = showImageDialog,
+            onDismiss = { showImageDialog = false },
+            onUrlConfirmed = { url ->
+                selectedImageUri = url
+                // Dialog closes automatically after confirmation animation
+            },
+            initialUrl = selectedImageUri ?: "",
+            repository = repository
+        )
     }
 }
+
+// ==========================================
+// Sub-Composables (Kept consistent with UI)
+// ==========================================
 
 @Composable
 private fun GlassImagePicker(
@@ -254,12 +275,20 @@ private fun GlassImagePicker(
                         .background(Color.Black.copy(alpha = 0.2f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Image,
-                        contentDescription = "Change Image",
-                        tint = Color.White.copy(alpha = 0.8f),
-                        modifier = Modifier.size(48.dp)
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.Image,
+                            contentDescription = "Change Image",
+                            tint = Color.White.copy(alpha = 0.9f),
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Tap to change",
+                            color = Color.White.copy(alpha = 0.9f),
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
                 }
             } else {
                 // Empty State
@@ -275,7 +304,7 @@ private fun GlassImagePicker(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "Tap to upload image",
+                        text = "Tap to add image URL",
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (isDark) Color.White.copy(0.6f) else Color.Black.copy(0.6f)
                     )
@@ -314,7 +343,7 @@ private fun GlassyInput(
             placeholder = {
                 Text(
                     text = placeholder,
-                    color = if(isDark) Color.White.copy(0.3f) else Color.Black.copy(0.3f)
+                    color = if (isDark) Color.White.copy(0.3f) else Color.Black.copy(0.3f)
                 )
             },
             singleLine = true,
@@ -369,7 +398,7 @@ private fun GlassyOptionRow(
             placeholder = {
                 Text(
                     text = placeholder,
-                    color = if(isDark) Color.White.copy(0.3f) else Color.Black.copy(0.3f)
+                    color = if (isDark) Color.White.copy(0.3f) else Color.Black.copy(0.3f)
                 )
             },
             singleLine = true,
