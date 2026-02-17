@@ -5,13 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.EaseOutBack
-import androidx.compose.animation.core.EaseOutCubic
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
@@ -29,7 +23,6 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -38,7 +31,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -46,7 +38,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
@@ -64,10 +55,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -76,13 +68,19 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.compose.animation.core.animateFloatAsState
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.nidoham.bhubishwo.admin.presentation.viewmodel.ResourceEvent
+import com.nidoham.bhubishwo.admin.presentation.viewmodel.ResourceViewModel
 import com.nidoham.bhubishwo.admin.ui.theme.Accents
 import com.nidoham.bhubishwo.admin.ui.theme.GlassDark
 import com.nidoham.bhubishwo.admin.ui.theme.GlassLight
@@ -93,160 +91,97 @@ import com.nidoham.bhubishwo.admin.ui.theme.glassBorderColor
 // DATA CLASSES & SEALED CLASSES
 // ═══════════════════════════════════════════════════════════════════════
 
+/**
+ * @Stable tells Compose that this data class correctly implements equals(),
+ * so Compose will recompose whenever state actually changes.
+ * Without this, unstable fields like Uri? and Set<ResourceType> cause
+ * Compose to skip recomposition, making the entire UI appear frozen —
+ * inputs don't respond, images don't appear, selections don't register.
+ */
+@Stable
 data class ResourceFormState(
     val title: String = "",
     val selectedImageUri: Uri? = null,
     val selectedTypes: Set<ResourceType> = emptySet(),
-    val customTags: List<String> = emptyList(),        // ← free-form extra tags
-    val currentTagInput: String = "",                   // ← text field for tag entry
     val isLoading: Boolean = false,
     val isImageLoading: Boolean = false,
     val errorMessage: String? = null
 ) {
-    /** All tags combined: type IDs + custom free-form tags */
-    val allTags: Set<String>
-        get() = selectedTypes.map { it.id }.toSet() + customTags.toSet()
+    val tags: Set<String>
+        get() = selectedTypes.map { it.id }.toSet()
 }
 
 sealed class ResourceType(
     val id: String,
     val displayName: String,
     val emoji: String,
-    // Each type has its own unique selected gradient
     val selectedGradientDark: List<Color>,
     val selectedGradientLight: List<Color>,
-    val badgeColor: Color,           // pill badge behind emoji
-    val glowColor: Color             // shadow / border glow when selected
+    val badgeColor: Color,
+    val glowColor: Color
 ) {
-    data object Country : ResourceType(
-        id                   = "country",
-        displayName          = "Country",
-        emoji                = "🌍",
-        selectedGradientDark = listOf(Color(0xFF1565C0), Color(0xFF0D47A1)),
-        selectedGradientLight= listOf(Color(0xFF42A5F5), Color(0xFF1E88E5)),
-        badgeColor           = Color(0xFF1976D2),
-        glowColor            = Color(0xFF2196F3)
-    )
     data object Flag : ResourceType(
-        id                   = "flag",
-        displayName          = "Flag",
-        emoji                = "🚩",
-        selectedGradientDark = listOf(Color(0xFF6A1B9A), Color(0xFF4A148C)),
-        selectedGradientLight= listOf(Color(0xFFCE93D8), Color(0xFFAB47BC)),
-        badgeColor           = Color(0xFF7B1FA2),
-        glowColor            = Color(0xFF9C27B0)
+        id                    = "flag",
+        displayName           = "Flag",
+        emoji                 = "🚩",
+        selectedGradientDark  = listOf(Color(0xFF6A1B9A), Color(0xFF4A148C)),
+        selectedGradientLight = listOf(Color(0xFFCE93D8), Color(0xFFAB47BC)),
+        badgeColor            = Color(0xFF7B1FA2),
+        glowColor             = Color(0xFF9C27B0)
     )
     data object Tourist : ResourceType(
-        id                   = "tourist",
-        displayName          = "Tourist",
-        emoji                = "📸",
-        selectedGradientDark = listOf(Color(0xFF00695C), Color(0xFF004D40)),
-        selectedGradientLight= listOf(Color(0xFF4DB6AC), Color(0xFF26A69A)),
-        badgeColor           = Color(0xFF00796B),
-        glowColor            = Color(0xFF009688)
-    )
-    data object Landmark : ResourceType(
-        id                   = "landmark",
-        displayName          = "Landmark",
-        emoji                = "🏛️",
-        selectedGradientDark = listOf(Color(0xFFB71C1C), Color(0xFF7F0000)),
-        selectedGradientLight= listOf(Color(0xFFEF9A9A), Color(0xFFE57373)),
-        badgeColor           = Color(0xFFC62828),
-        glowColor            = Color(0xFFF44336)
-    )
-    data object Culture : ResourceType(
-        id                   = "culture",
-        displayName          = "Culture",
-        emoji                = "🎭",
-        selectedGradientDark = listOf(Color(0xFFE65100), Color(0xFFBF360C)),
-        selectedGradientLight= listOf(Color(0xFFFFCC80), Color(0xFFFFA726)),
-        badgeColor           = Color(0xFFF57C00),
-        glowColor            = Color(0xFFFF9800)
-    )
-    data object Nature : ResourceType(
-        id                   = "nature",
-        displayName          = "Nature",
-        emoji                = "🌿",
-        selectedGradientDark = listOf(Color(0xFF2E7D32), Color(0xFF1B5E20)),
-        selectedGradientLight= listOf(Color(0xFFA5D6A7), Color(0xFF66BB6A)),
-        badgeColor           = Color(0xFF388E3C),
-        glowColor            = Color(0xFF4CAF50)
-    )
-    data object Food : ResourceType(
-        id                   = "food",
-        displayName          = "Food",
-        emoji                = "🍜",
-        selectedGradientDark = listOf(Color(0xFF4E342E), Color(0xFF3E2723)),
-        selectedGradientLight= listOf(Color(0xFFBCAAA4), Color(0xFF8D6E63)),
-        badgeColor           = Color(0xFF5D4037),
-        glowColor            = Color(0xFF795548)
-    )
-    data object Festival : ResourceType(
-        id                   = "festival",
-        displayName          = "Festival",
-        emoji                = "🎉",
-        selectedGradientDark = listOf(Color(0xFFC62828), Color(0xFF880E4F)),
-        selectedGradientLight= listOf(Color(0xFFF48FB1), Color(0xFFEC407A)),
-        badgeColor           = Color(0xFFAD1457),
-        glowColor            = Color(0xFFE91E63)
+        id                    = "tourist",
+        displayName           = "Tourist",
+        emoji                 = "📸",
+        selectedGradientDark  = listOf(Color(0xFF00695C), Color(0xFF004D40)),
+        selectedGradientLight = listOf(Color(0xFF4DB6AC), Color(0xFF26A69A)),
+        badgeColor            = Color(0xFF00796B),
+        glowColor             = Color(0xFF009688)
     )
 
     companion object {
-        val all: List<ResourceType> = listOf(
-            Country, Flag, Tourist, Landmark, Culture, Nature, Food, Festival
-        )
+        val all: List<ResourceType> = listOf(Flag, Tourist)
     }
 }
 
 sealed class ResourceFormEvent {
-    data class TitleChanged(val title: String)          : ResourceFormEvent()
-    data class ImageSelected(val uri: Uri?)             : ResourceFormEvent()
-    data class ImageLoading(val loading: Boolean)       : ResourceFormEvent()
-    data class TypeToggled(val type: ResourceType)      : ResourceFormEvent()
-    data class TagInputChanged(val value: String)       : ResourceFormEvent()
-    data class CustomTagAdded(val tag: String)          : ResourceFormEvent()
-    data class CustomTagRemoved(val tag: String)        : ResourceFormEvent()
-    data object UploadClicked                           : ResourceFormEvent()
-    data object ErrorDismissed                          : ResourceFormEvent()
+    data class TitleChanged(val title: String)    : ResourceFormEvent()
+    data class ImageSelected(val uri: Uri?)       : ResourceFormEvent()
+    data class ImageLoading(val loading: Boolean) : ResourceFormEvent()
+    data class TypeToggled(val type: ResourceType): ResourceFormEvent()
+    data object UploadClicked                     : ResourceFormEvent()
+    data object ErrorDismissed                    : ResourceFormEvent()
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// ROOT SCREEN — local state holder
+// ROOT SCREEN
 // ═══════════════════════════════════════════════════════════════════════
 
 @Composable
-fun ResourceCreatorScreen() {
-    var state by remember { mutableStateOf(ResourceFormState()) }
+fun ResourceCreatorScreen(
+    viewModel: ResourceViewModel = hiltViewModel(),
+    onUploadSuccess: (resourceId: String) -> Unit = {},
+    onError: (message: String) -> Unit = {}
+) {
+    val state by viewModel.state.collectAsState()
+
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is ResourceEvent.UploadSuccess    -> onUploadSuccess(event.resourceId)
+                is ResourceEvent.ShowError        -> onError(event.message)
+                is ResourceEvent.NavigateToDetail -> { /* handle navigation if needed */ }
+            }
+        }
+    }
 
     ResourceCreatorContent(
         state   = state,
-        onEvent = { event ->
-            state = when (event) {
-                is ResourceFormEvent.TitleChanged    -> state.copy(title = event.title)
-                is ResourceFormEvent.ImageSelected   -> state.copy(selectedImageUri = event.uri, isImageLoading = false)
-                is ResourceFormEvent.ImageLoading    -> state.copy(isImageLoading = event.loading)
-                is ResourceFormEvent.TypeToggled     -> {
-                    val updated = if (event.type in state.selectedTypes)
-                        state.selectedTypes - event.type
-                    else
-                        state.selectedTypes + event.type
-                    state.copy(selectedTypes = updated)
-                }
-                is ResourceFormEvent.TagInputChanged -> state.copy(currentTagInput = event.value)
-                is ResourceFormEvent.CustomTagAdded  -> {
-                    val tag = event.tag.trim().lowercase()
-                    if (tag.isNotBlank() && tag !in state.customTags)
-                        state.copy(customTags = state.customTags + tag, currentTagInput = "")
-                    else
-                        state.copy(currentTagInput = "")
-                }
-                is ResourceFormEvent.CustomTagRemoved -> {
-                    state.copy(customTags = state.customTags - event.tag)
-                }
-                is ResourceFormEvent.UploadClicked   -> state.copy(isLoading = true)
-                is ResourceFormEvent.ErrorDismissed  -> state.copy(errorMessage = null)
-            }
-        }
+        // FIX: Explicit lambda wrapper instead of viewModel::onEvent.
+        // A method reference is not a stable lambda in Compose — it gets a
+        // new instance each recomposition, which can break child composables
+        // that capture it via remember {}.
+        onEvent = { viewModel.onEvent(it) }
     )
 }
 
@@ -284,10 +219,6 @@ fun ResourceCreatorContent(
             .padding(horizontal = 20.dp, vertical = 20.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
-
-        // ── Header ────────────────────────────────────────────
-        ScreenHeader(isDark = isDark)
-
         // ── Image picker ──────────────────────────────────────
         GlassImagePicker(
             uri       = state.selectedImageUri,
@@ -312,27 +243,16 @@ fun ResourceCreatorContent(
             modifier      = Modifier.fillMaxWidth()
         )
 
-        // ── Resource Types (multi-select chips) ───────────────
+        // ── Resource Types ────────────────────────────────────
         ResourceTypeSection(
             selectedTypes = state.selectedTypes,
             enabled       = !state.isLoading,
             onToggle      = { onEvent(ResourceFormEvent.TypeToggled(it)) }
         )
 
-        // ── Custom Tags ───────────────────────────────────────
-        CustomTagsSection(
-            customTags      = state.customTags,
-            tagInput        = state.currentTagInput,
-            enabled         = !state.isLoading,
-            onInputChange   = { onEvent(ResourceFormEvent.TagInputChanged(it)) },
-            onAddTag        = { onEvent(ResourceFormEvent.CustomTagAdded(it)) },
-            onRemoveTag     = { onEvent(ResourceFormEvent.CustomTagRemoved(it)) },
-            focusManager    = focusManager
-        )
-
-        // ── Combined tag preview ──────────────────────────────
-        AnimatedVisibility(visible = state.allTags.isNotEmpty()) {
-            AllTagsPreview(tags = state.allTags)
+        // ── Tag preview ───────────────────────────────────────
+        AnimatedVisibility(visible = state.tags.isNotEmpty()) {
+            TagsPreview(tags = state.tags)
         }
 
         // ── Error banner ──────────────────────────────────────
@@ -355,35 +275,12 @@ fun ResourceCreatorContent(
             enabled   = !state.isLoading &&
                     state.title.isNotBlank() &&
                     state.selectedImageUri != null &&
-                    state.allTags.isNotEmpty(),
-            tagCount  = state.allTags.size,
+                    state.tags.isNotEmpty(),
+            tagCount  = state.tags.size,
             onClick   = { onEvent(ResourceFormEvent.UploadClicked) }
         )
 
         Spacer(Modifier.height(16.dp))
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// SCREEN HEADER
-// ═══════════════════════════════════════════════════════════════════════
-
-@Composable
-private fun ScreenHeader(isDark: Boolean) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            text       = "Create Resource",
-            style      = GlassTypography.VibrancyPrimary.copy(
-                fontSize   = 26.sp,
-                fontWeight = FontWeight.Bold
-            ),
-            color      = MaterialTheme.colorScheme.onSurface
-        )
-        Text(
-            text  = "Upload & tag a new media resource",
-            style = GlassTypography.VibrancySecondary.copy(fontSize = 14.sp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
@@ -401,7 +298,6 @@ private fun ResourceTypeSection(
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
 
-        // Header row
         Row(
             modifier              = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -409,12 +305,12 @@ private fun ResourceTypeSection(
         ) {
             Column {
                 Text(
-                    text  = "Resource Types",
+                    text  = "Resource Type",
                     style = GlassTypography.VibrancyPrimary.copy(fontWeight = FontWeight.SemiBold),
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text  = "Select all that apply",
+                    text  = "Select one or both",
                     style = GlassTypography.VibrancySecondary.copy(fontSize = 12.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -439,7 +335,6 @@ private fun ResourceTypeSection(
             }
         }
 
-        // ── Version-safe wrapping chip grid ──
         ChipFlowLayout(
             horizontalGap = 8.dp,
             verticalGap   = 8.dp,
@@ -459,7 +354,7 @@ private fun ResourceTypeSection(
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// RESOURCE TYPE CHIP — each type has its OWN distinct selected style
+// RESOURCE TYPE CHIP
 // ═══════════════════════════════════════════════════════════════════════
 
 @Composable
@@ -470,56 +365,32 @@ private fun ResourceTypeChip(
     isDark: Boolean,
     onClick: () -> Unit
 ) {
-    // Animate scale for a satisfying "pop" on select
     val scale by animateFloatAsState(
-        targetValue = if (isSelected) 1.04f else 1f,
+        targetValue   = if (isSelected) 1.04f else 1f,
         animationSpec = spring(dampingRatio = 0.5f, stiffness = 400f),
-        label = "chipScale"
-    )
-
-    // Animate shadow elevation
-    val elevation by animateDpAsState(
-        targetValue   = if (isSelected) 6.dp else 0.dp,
-        animationSpec = tween(200, easing = FastOutSlowInEasing),
-        label         = "chipElevation"
+        label         = "chipScale"
     )
 
     val selectedGradient = if (isDark) type.selectedGradientDark else type.selectedGradientLight
 
-    // Unselected glass surface colors
     val unselectedBg = if (isDark)
         GlassDark.GlassRegular.copy(alpha = 0.40f)
     else
         GlassLight.GlassRegular.copy(alpha = 0.50f)
-
-    val border = when {
-        isSelected -> BorderStroke(1.5.dp, type.glowColor.copy(alpha = 0.70f))
-        else       -> BorderStroke(
-            1.dp,
-            if (isDark) GlassDark.GlassBorderSubtle.copy(alpha = 0.45f)
-            else        GlassLight.GlassBorderSubtle.copy(alpha = 0.35f)
-        )
-    }
 
     Box(
         modifier = Modifier
             .scale(scale)
             .clip(RoundedCornerShape(22.dp))
             .then(
-                if (isSelected) Modifier.background(
-                    Brush.linearGradient(selectedGradient)
-                ) else Modifier.background(unselectedBg)
+                if (isSelected) Modifier.background(Brush.linearGradient(selectedGradient))
+                else            Modifier.background(unselectedBg)
             )
-            .then(
-                Modifier.clickable(
-                    enabled           = enabled,
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication        = null,
-                    onClick           = onClick
-                )
-            )
+            // FIX: Removed custom interactionSource + indication = null.
+            // Using the default clickable provides correct ripple and ensures
+            // touch events are properly registered and not silently dropped.
+            .clickable(enabled = enabled, onClick = onClick)
     ) {
-        // Glow ring overlay on selected
         if (isSelected) {
             Box(
                 modifier = Modifier
@@ -532,15 +403,13 @@ private fun ResourceTypeChip(
             )
         }
 
-        // Chip content
         Row(
             modifier              = Modifier.padding(start = 10.dp, end = 14.dp, top = 9.dp, bottom = 9.dp),
             horizontalArrangement = Arrangement.spacedBy(7.dp),
             verticalAlignment     = Alignment.CenterVertically
         ) {
-            // Left: badge circle with emoji — color matches type
             Box(
-                modifier        = Modifier
+                modifier = Modifier
                     .size(26.dp)
                     .clip(CircleShape)
                     .background(
@@ -550,7 +419,7 @@ private fun ResourceTypeChip(
                 contentAlignment = Alignment.Center
             ) {
                 AnimatedContent(
-                    targetState   = isSelected,
+                    targetState  = isSelected,
                     transitionSpec = {
                         (scaleIn(tween(180, easing = EaseOutBack)) + fadeIn()) togetherWith
                                 (scaleOut(tween(120)) + fadeOut())
@@ -565,15 +434,11 @@ private fun ResourceTypeChip(
                             tint               = Color.White
                         )
                     } else {
-                        Text(
-                            text     = type.emoji,
-                            fontSize = 13.sp
-                        )
+                        Text(text = type.emoji, fontSize = 13.sp)
                     }
                 }
             }
 
-            // Label
             Text(
                 text  = type.displayName,
                 style = GlassTypography.VibrancyPrimary.copy(
@@ -592,173 +457,21 @@ private fun ResourceTypeChip(
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// CUSTOM TAGS SECTION
+// TAGS PREVIEW
 // ═══════════════════════════════════════════════════════════════════════
 
 @Composable
-private fun CustomTagsSection(
-    customTags: List<String>,
-    tagInput: String,
-    enabled: Boolean,
-    onInputChange: (String) -> Unit,
-    onAddTag: (String) -> Unit,
-    onRemoveTag: (String) -> Unit,
-    focusManager: androidx.compose.ui.focus.FocusManager
-) {
-    val isDark = isSystemInDarkTheme()
-
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(
-            text  = "Custom Tags",
-            style = GlassTypography.VibrancyPrimary.copy(fontWeight = FontWeight.SemiBold),
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Text(
-            text  = "Add extra searchable keywords",
-            style = GlassTypography.VibrancySecondary.copy(fontSize = 12.sp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        // Input row
-        Row(
-            modifier          = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
-                value         = tagInput,
-                onValueChange = onInputChange,
-                placeholder   = { Text("e.g. mountains, historic, hidden-gem", fontSize = 12.sp) },
-                enabled       = enabled,
-                singleLine    = true,
-                modifier      = Modifier.weight(1f),
-                shape         = RoundedCornerShape(12.dp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(
-                    onDone = {
-                        if (tagInput.isNotBlank()) onAddTag(tagInput)
-                        else focusManager.clearFocus()
-                    }
-                ),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor   = if (isDark) GlassDark.GlassThin     else GlassLight.GlassThin,
-                    unfocusedContainerColor = if (isDark) GlassDark.GlassUltraThin else GlassLight.GlassUltraThin,
-                    focusedBorderColor      = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
-                    unfocusedBorderColor    = glassBorderColor().copy(alpha = 0.5f)
-                ),
-                textStyle = GlassTypography.OnGlassRegular.copy(fontSize = 13.sp)
-            )
-
-            // Add button
-            Surface(
-                shape    = RoundedCornerShape(12.dp),
-                color    = if (tagInput.isNotBlank() && enabled)
-                    MaterialTheme.colorScheme.primary
-                else
-                    MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier
-                    .size(48.dp)
-                    .clickable(
-                        enabled = tagInput.isNotBlank() && enabled,
-                        onClick = { onAddTag(tagInput) }
-                    )
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector        = Icons.Default.Add,
-                        contentDescription = "Add tag",
-                        tint               = if (tagInput.isNotBlank() && enabled)
-                            MaterialTheme.colorScheme.onPrimary
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                        modifier           = Modifier.size(20.dp)
-                    )
-                }
-            }
-        }
-
-        // Existing custom tags as removable chips
-        AnimatedVisibility(visible = customTags.isNotEmpty()) {
-            ChipFlowLayout(
-                horizontalGap = 6.dp,
-                verticalGap   = 6.dp,
-                modifier      = Modifier.fillMaxWidth()
-            ) {
-                customTags.forEach { tag ->
-                    CustomTagChip(
-                        tag      = tag,
-                        enabled  = enabled,
-                        isDark   = isDark,
-                        onRemove = { onRemoveTag(tag) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CustomTagChip(
-    tag: String,
-    enabled: Boolean,
-    isDark: Boolean,
-    onRemove: () -> Unit
-) {
-    Surface(
-        shape  = RoundedCornerShape(20.dp),
-        color  = if (isDark)
-            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.70f)
-        else
-            MaterialTheme.colorScheme.secondaryContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.30f))
-    ) {
-        Row(
-            modifier              = Modifier.padding(start = 10.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment     = Alignment.CenterVertically
-        ) {
-            Text(
-                text  = "#$tag",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSecondaryContainer
-            )
-            if (enabled) {
-                Box(
-                    modifier = Modifier
-                        .size(18.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.12f))
-                        .clickable(onClick = onRemove),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector        = Icons.Default.Close,
-                        contentDescription = "Remove $tag",
-                        modifier           = Modifier.size(10.dp),
-                        tint               = MaterialTheme.colorScheme.onSecondaryContainer
-                    )
-                }
-            }
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// ALL TAGS PREVIEW — combined type + custom tags at a glance
-// ═══════════════════════════════════════════════════════════════════════
-
-@Composable
-private fun AllTagsPreview(tags: Set<String>) {
+private fun TagsPreview(tags: Set<String>) {
     val isDark = isSystemInDarkTheme()
 
     Surface(
         shape  = RoundedCornerShape(16.dp),
         color  = if (isDark) GlassDark.SurfaceVariant.copy(alpha = 0.50f)
-        else   GlassLight.SurfaceVariant.copy(alpha = 0.50f),
+        else        GlassLight.SurfaceVariant.copy(alpha = 0.50f),
         border = BorderStroke(1.dp, glassBorderColor().copy(alpha = 0.35f))
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
+            modifier            = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(
@@ -772,7 +485,7 @@ private fun AllTagsPreview(tags: Set<String>) {
                     tint               = MaterialTheme.colorScheme.primary
                 )
                 Text(
-                    text  = "${tags.size} tags will be saved",
+                    text  = "${tags.size} tag${if (tags.size > 1) "s" else ""} will be saved",
                     style = GlassTypography.VibrancySecondary.copy(
                         fontSize   = 12.sp,
                         fontWeight = FontWeight.Medium
@@ -807,7 +520,7 @@ private fun AllTagsPreview(tags: Set<String>) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// CHIP FLOW LAYOUT — version-safe wrapping layout (no FlowRow API needed)
+// CHIP FLOW LAYOUT
 // ═══════════════════════════════════════════════════════════════════════
 
 @Composable
@@ -876,7 +589,11 @@ private fun GlassImagePicker(
     onRemove: () -> Unit,
     enabled: Boolean
 ) {
-    val isDark = isSystemInDarkTheme()
+    val isDark  = isSystemInDarkTheme()
+    // FIX: LocalContext needed to build a proper ImageRequest.
+    // Without it, Coil cannot resolve content:// URIs returned by GetContent()
+    // on many devices, so the image silently fails to load.
+    val context = LocalContext.current
 
     Box(
         modifier = Modifier
@@ -884,7 +601,9 @@ private fun GlassImagePicker(
             .height(220.dp)
             .clip(RoundedCornerShape(20.dp))
             .background(if (isDark) GlassDark.SurfaceVariant else GlassLight.SurfaceVariant)
-            .clickable(enabled = enabled && !isLoading, onClick = onClick),
+            // FIX: Only allow clicking the empty state to open picker.
+            // When an image is shown, the clickable area below handles re-picking.
+            .clickable(enabled = enabled && !isLoading && uri == null, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         if (isDark) {
@@ -906,13 +625,17 @@ private fun GlassImagePicker(
             )
 
             uri != null -> {
+                // FIX: Use ImageRequest.Builder with context for reliable
+                // content:// URI resolution across all Android API levels.
                 AsyncImage(
-                    model              = uri,
+                    model = ImageRequest.Builder(context)
+                        .data(uri)
+                        .crossfade(true)
+                        .build(),
                     contentDescription = "Selected image",
                     modifier           = Modifier.fillMaxSize(),
                     contentScale       = ContentScale.Crop
                 )
-                // Overlay gradient for legibility of remove button
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -1029,7 +752,9 @@ private fun GlassErrorSurface(message: String, onDismiss: () -> Unit) {
         color    = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.85f)
     ) {
         Row(
-            modifier              = Modifier.padding(16.dp).fillMaxWidth(),
+            modifier              = Modifier
+                .padding(16.dp)
+                .fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment     = Alignment.CenterVertically
         ) {
@@ -1055,8 +780,8 @@ private fun GlassUploadButton(
     tagCount: Int,
     onClick: () -> Unit
 ) {
-    val isDark          = isSystemInDarkTheme()
-    val useGradient     = enabled && isDark
+    val isDark      = isSystemInDarkTheme()
+    val useGradient = enabled && isDark
 
     val alpha by animateFloatAsState(
         targetValue   = if (enabled) 1f else 0.50f,
@@ -1072,23 +797,23 @@ private fun GlassUploadButton(
             .clip(RoundedCornerShape(16.dp))
             .then(
                 if (useGradient) Modifier.background(
-                    Brush.horizontalGradient(listOf(Color(0xFF1565C0), Color(0xFF6A1B9A)))
+                    Brush.horizontalGradient(listOf(Color(0xFF6A1B9A), Color(0xFF00695C)))
                 ) else Modifier
             ),
         contentAlignment = Alignment.Center
     ) {
         Button(
-            onClick   = onClick,
-            modifier  = Modifier.fillMaxSize(),
-            enabled   = enabled,
-            shape     = RoundedCornerShape(16.dp),
-            colors    = ButtonDefaults.buttonColors(
+            onClick        = onClick,
+            modifier       = Modifier.fillMaxSize(),
+            enabled        = enabled,
+            shape          = RoundedCornerShape(16.dp),
+            colors         = ButtonDefaults.buttonColors(
                 containerColor         = if (useGradient) Color.Transparent
-                else MaterialTheme.colorScheme.primary,
+                else                     MaterialTheme.colorScheme.primary,
                 disabledContainerColor = if (isDark) GlassDark.SurfaceVariant
-                else GlassLight.SurfaceVariant
+                else                     GlassLight.SurfaceVariant
             ),
-            elevation = ButtonDefaults.buttonElevation(0.dp, 0.dp),
+            elevation      = ButtonDefaults.buttonElevation(0.dp, 0.dp),
             contentPadding = PaddingValues(horizontal = 24.dp)
         ) {
             if (isLoading) {
@@ -1111,14 +836,13 @@ private fun GlassUploadButton(
                         color = if (enabled) Color.White
                         else   MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    // Show tag count badge inline
                     if (enabled && tagCount > 0) {
                         Surface(
                             shape = CircleShape,
                             color = Color.White.copy(alpha = 0.22f)
                         ) {
                             Text(
-                                text     = "$tagCount tags",
+                                text     = "$tagCount tag${if (tagCount > 1) "s" else ""}",
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                                 style    = MaterialTheme.typography.labelSmall,
                                 color    = Color.White

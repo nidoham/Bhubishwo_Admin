@@ -25,14 +25,6 @@ import java.io.File
 import java.util.UUID
 import javax.inject.Inject
 
-/**
- * ViewModel for resource creation with proper state management and one-shot events.
- *
- * FIX 1: Removed @Inject CoroutineDispatcher — no Hilt binding existed; use Dispatchers.IO directly.
- * FIX 2: Removed SavedStateHandle for ResourceFormState — it's not Parcelable (contains Uri, Set of
- *         sealed objects). State survives config changes naturally via MutableStateFlow in ViewModel.
- * FIX 3: Inject ApplicationContext to implement URI → File correctly instead of always returning null.
- */
 @HiltViewModel
 class ResourceViewModel @Inject constructor(
     private val repository: ResourceRepository,
@@ -47,8 +39,7 @@ class ResourceViewModel @Inject constructor(
     val state: StateFlow<ResourceFormState> = _state.asStateFlow()
 
     // ════════════════════════════════════════════════════════
-    // ONE-SHOT EVENTS — consumed only by CreatorActivity,
-    // NOT also collected inside ResourceCreatorScreen (was a race condition).
+    // ONE-SHOT EVENTS
     // ════════════════════════════════════════════════════════
 
     private val _events = MutableSharedFlow<ResourceEvent>(extraBufferCapacity = 1)
@@ -68,8 +59,8 @@ class ResourceViewModel @Inject constructor(
                 _state.update {
                     it.copy(
                         selectedImageUri = event.uri,
-                        isImageLoading = false,
-                        errorMessage = null
+                        isImageLoading   = false,
+                        errorMessage     = null
                     )
                 }
             }
@@ -88,29 +79,13 @@ class ResourceViewModel @Inject constructor(
                 }
             }
 
-            is ResourceFormEvent.TagInputChanged -> {
-                _state.update { it.copy(currentTagInput = event.value) }
-            }
-
-            is ResourceFormEvent.CustomTagAdded -> {
-                val tag = event.tag.trim().lowercase()
-                _state.update { current ->
-                    if (tag.isNotBlank() && tag !in current.customTags)
-                        current.copy(customTags = current.customTags + tag, currentTagInput = "")
-                    else
-                        current.copy(currentTagInput = "")
-                }
-            }
-
-            is ResourceFormEvent.CustomTagRemoved -> {
-                _state.update { it.copy(customTags = it.customTags - event.tag) }
-            }
-
             is ResourceFormEvent.UploadClicked -> uploadResource()
 
             is ResourceFormEvent.ErrorDismissed -> {
                 _state.update { it.copy(errorMessage = null) }
             }
+
+            else -> {}
         }
     }
 
@@ -131,11 +106,9 @@ class ResourceViewModel @Inject constructor(
 
         viewModelScope.launch {
             try {
-                // Step 1 — URI → temp File using ContentResolver (FIX 3: was always returning null)
+                // Step 1 — URI → temp File
                 val uri = checkNotNull(current.selectedImageUri)
-                val imageFile = withContext(Dispatchers.IO) {
-                    uriToTempFile(uri)
-                }
+                val imageFile = withContext(Dispatchers.IO) { uriToTempFile(uri) }
 
                 if (imageFile == null) {
                     _state.update {
@@ -155,7 +128,7 @@ class ResourceViewModel @Inject constructor(
                 if (!imgbbResult.success || imgbbResult.url.isNullOrBlank()) {
                     _state.update {
                         it.copy(
-                            isLoading = false,
+                            isLoading    = false,
                             errorMessage = imgbbResult.errorMessage ?: "Upload failed"
                         )
                     }
@@ -167,16 +140,16 @@ class ResourceViewModel @Inject constructor(
 
                 // Step 3 — Persist to Firestore
                 val resource = Resource(
-                    id = UUID.randomUUID().toString(),
+                    id    = UUID.randomUUID().toString(),
                     title = current.title.trim(),
-                    url = imgbbResult.url,
-                    tags = current.allTags
+                    url   = imgbbResult.url,
+                    tags  = current.tags
                 )
 
                 val firestoreResult = repository.push(resource)
 
                 if (firestoreResult.isSuccess) {
-                    _state.update { ResourceFormState() } // Reset form on success
+                    _state.update { ResourceFormState() }
                     _events.tryEmit(ResourceEvent.UploadSuccess(resource.id))
                 } else {
                     val error = firestoreResult.exceptionOrNull()?.message ?: "Save failed"
@@ -193,7 +166,7 @@ class ResourceViewModel @Inject constructor(
     }
 
     // ════════════════════════════════════════════════════════
-    // URI → FILE  (FIX 3: real implementation using ContentResolver)
+    // URI → FILE
     // ════════════════════════════════════════════════════════
 
     private fun uriToTempFile(uri: Uri): File? {
@@ -217,10 +190,10 @@ class ResourceViewModel @Inject constructor(
     // ════════════════════════════════════════════════════════
 
     private fun validate(state: ResourceFormState): String? = when {
-        state.title.isBlank() -> "Title cannot be empty"
+        state.title.isBlank()          -> "Title cannot be empty"
         state.selectedImageUri == null -> "Please select an image"
-        state.allTags.isEmpty() -> "Select at least one type or add a custom tag"
-        else -> null
+        state.tags.isEmpty()           -> "Select at least one resource type"
+        else                           -> null
     }
 }
 
@@ -229,7 +202,7 @@ class ResourceViewModel @Inject constructor(
 // ════════════════════════════════════════════════════════
 
 sealed class ResourceEvent {
-    data class UploadSuccess(val resourceId: String) : ResourceEvent()
-    data class ShowError(val message: String) : ResourceEvent()
+    data class UploadSuccess(val resourceId: String)    : ResourceEvent()
+    data class ShowError(val message: String)           : ResourceEvent()
     data class NavigateToDetail(val resourceId: String) : ResourceEvent()
 }
